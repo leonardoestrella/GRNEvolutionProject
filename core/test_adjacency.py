@@ -36,9 +36,9 @@ matrix_a3 = AdjacencyMatrix(label="A3", n_nodes=3, weighted_matrix=a_3,
                           initial_state=np.array([1, -1, -1]))
 
 print(f"""Three AdjacencyMatrix objects created:\n 
-      {matrix_a1.label} = \n{matrix_a1.weigthed_matrix}\n
-      {matrix_a2.label} = \n{matrix_a2.weigthed_matrix}\n
-      {matrix_a3.label} = \n{matrix_a3.weigthed_matrix}\n""")
+      {matrix_a1.label} = \n{matrix_a1.weighted_matrix}\n
+      {matrix_a2.label} = \n{matrix_a2.weighted_matrix}\n
+      {matrix_a3.label} = \n{matrix_a3.weighted_matrix}\n""")
 
 # 2. Taking a step forward
 
@@ -72,6 +72,11 @@ assert(np.array_equal(matrix_a1.stable_state, matrix_a1.initial_state))
 assert(matrix_a2.stable_state == None)
 assert(matrix_a3.stable_state is not None) # For curiosity, stable state is [1,0,1] given the initial state
 
+print("Stable States | Target States:")
+print(f"A1 = {matrix_a1.stable_state} | {matrix_a1.target_state}")
+print(f"A2 = {matrix_a2.stable_state} | {matrix_a2.target_state}")
+print(f"A3 = {matrix_a3.stable_state} | {matrix_a3.target_state}\n")
+
 # 4. Computing fitness
 
 from utils import default_distance, default_fitness
@@ -85,5 +90,10 @@ matrix_a3.compute_fitness(distance_function=default_distance, fitness_function=d
 assert( matrix_a1.fitness is not None)
 assert( matrix_a2.fitness is not None)
 assert( matrix_a3.fitness is not None)
+
+print("Fitness values:")
+print(f"A1 = {matrix_a1.fitness}")
+print(f"A2 = {matrix_a2.fitness}")
+print(f"A3 = {matrix_a3.fitness}")
 
 print("All tests passed!")

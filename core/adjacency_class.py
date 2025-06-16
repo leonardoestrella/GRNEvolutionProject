@@ -33,7 +33,7 @@ class AdjacencyMatrix:
         # Characteristics attributes
         self.label = label # indicator label for the adjacency matrix
         self.n_nodes = n_nodes
-        self.weigthed_matrix = weighted_matrix
+        self.weighted_matrix = weighted_matrix
 
         # Dynamics attributes
         self.initial_state = initial_state #this should be the same for all matrices
@@ -76,11 +76,12 @@ class AdjacencyMatrix:
     
     def transfer_values(self, other_matrix): # PAUSE JUNE 12 - FIGURE OUT HOW WILL THE OFFSPRING GENERATION WORK
         """
-        Transfer the values from another adjacency matrix to this one.
+        Transfer the values from another adjacency matrix to this one conserving
+        its own label
         """
-        self.label = other_matrix.label
+        self.label = self.label
         self.n_nodes = other_matrix.n_nodes
-        self.weigthed_matrix = other_matrix.weigthed_matrix
+        self.weighted_matrix = other_matrix.weighted_matrix
         self.initial_state = other_matrix.initial_state
         self.stable_state = other_matrix.stable_state
         self.fitness = other_matrix.fitness
@@ -95,8 +96,8 @@ class AdjacencyMatrix:
         """
         # Characteristics attributes
         self.label = label # indicator label for the adjacency matrix
-        self.n_nodes = n_nodes
-        self.weigthed_matrix = weighted_matrix
+        self.n_nodes = n_nodes 
+        self.weighted_matrix = weighted_matrix
 
         # Dynamics attributes
         self.initial_state = initial_state #this should be the same for all matrices
@@ -119,7 +120,7 @@ class AdjacencyMatrix:
             np.ndarray: The new state after applying the dynamics.
         """
         
-        updated_state = self.weigthed_matrix @ current_state
+        updated_state = self.weighted_matrix @ current_state
         return activation_function(updated_state)
 
     def find_stable_state(self,n_steps, activation_function = np.sign):
