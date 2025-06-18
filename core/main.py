@@ -15,7 +15,7 @@ import numpy as np
 from scipy.stats import norm
 from params import config
 from adjacency_class import AdjacencyMatrix
-from utils import default_distance, default_fitness, generate_offspring
+from utils import default_distance, default_fitness, generate_offspring, store_data_instant, clear_csv_file_with_headers
 import matplotlib.pyplot as plt
 
 # Write down the parameters
@@ -48,6 +48,15 @@ n_generations = config['n_generations']
 target_state = np.random.choice([1,-1], size = (n_genes))
 initial_state = np.random.choice([1,-1], size = (n_genes))
 
+
+headers = [
+        'generation',
+        'fitness_mean', 'fitness_min', 'fitness_max', 'fitness_std',
+        'fitness_p5', 'fitness_p10', 'fitness_p25', 'fitness_p75', 'fitness_p90', 'fitness_p95',
+        'unstable_states', 'n_nets', 'n_genes'
+    ]
+clear_csv_file_with_headers("analysis/summary_stats.csv", headers) # Clear csv
+
 current_pop = []
 old_pop = []
 
@@ -76,9 +85,7 @@ for mat in old_pop:
     mat.find_stable_state(n_max_steps,activation_function = np.sign)
     mat.compute_fitness(default_distance,default_fitness, np.exp(-1/selection_strength))
 
-avg_fitness_hist[0] = np.mean([mat.fitness for mat in old_pop])
-std_fitness_hist[0] = np.std([mat.fitness for mat in old_pop])
-unstable_states[0] = sum(1 for mat in old_pop if mat.stable_state is None)
+store_data_instant(old_pop,'analysis/summary_stats.csv',0)
 
 for generation in range(n_generations):
 
@@ -88,21 +95,12 @@ for generation in range(n_generations):
                        p_recombination=p_recombination, max_attempts = max_attempts,
                        p_mutation=p_mutation, distance_function=default_distance,
                        fitness_function= default_fitness, unstable_fitness= np.exp(-1/selection_strength))
-    # Complexity infinitely large? - Randomness make it possible to never end the loop!
+    # Bottleneck in this function. find_stable_state takes a lot of time. 
+    # Might need to change the whole function to introduce parallelization!
 
-    # TO DO: optimize this function!
-    # This is the main driver of running time. To find a stable state, we do, at least,
-    # one matrix multiplication of complexity O(N^2) for each of the N generated offspring.
-    # This contributes to a O(N^3) complexity. 
-    
-    # Compute data from the new population
+    # Store instantaneous data
 
-    fitness_list = [mat.fitness for mat in current_pop] # O(N)
-
-    avg_fitness = np.mean(fitness_list) #O(N)
-    std_fitness = np.std(fitness_list) #O(N)
-    avg_fitness_hist[generation+1] = avg_fitness
-    std_fitness_hist[generation+1] = std_fitness 
+    store_data_instant(current_pop, 'analysis/summary_stats.csv', generation+1)
 
     ## Number of unstable states
     unstable_states[generation+1] = sum(1 for mat in current_pop if mat.stable_state is None) # O(N)
@@ -111,27 +109,3 @@ for generation in range(n_generations):
     for idx in range(N_nets): # Complexity O(N)
         old_pop[idx].transfer_values(current_pop[idx])
         current_pop[idx].reset(label = current_pop[idx].label)
-
-fig, axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
-
-# Plot 1: Average Fitness with Standard Error
-axes[0].plot(np.arange(n_generations + 1), avg_fitness_hist, label='Mean', marker='o')
-axes[0].fill_between(
-    np.arange(n_generations + 1),
-    avg_fitness_hist - 2*std_fitness_hist / np.sqrt(N_nets),
-    avg_fitness_hist + 2*std_fitness_hist / np.sqrt(N_nets),
-    alpha=0.3,
-    label='2 SE'
-)
-axes[0].set_ylabel("Average Fitness")
-axes[0].legend()
-axes[0].grid(True)
-
-# Plot 2: Number of Unstable States
-axes[1].plot(np.arange(n_generations + 1), unstable_states, label='# Unstable States', marker='o', color='orange')
-axes[1].set_xlabel("Generation")
-axes[1].set_ylabel("# Unstable States")
-axes[1].grid(True)
-
-plt.tight_layout()
-plt.show()
