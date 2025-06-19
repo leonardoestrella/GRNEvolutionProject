@@ -3,22 +3,8 @@ from scipy.stats import norm
 import numpy as np
 import csv
 import os
-
-
-n_genes = config['n_genes'] # probability of a gene being expressed
-c_connection = config['c_connection'] # fraction of connections
-p_mutation = 1/ (c_connection * n_genes**2) # probability of mutations
-p_recombination = config['p_recombination']
-
-mu = config['mu']
-sigma = config['sigma']
-rho_w = config['rho_w'](loc = mu, scale = sigma) # weight distribution
-
-# Dynamics and selection
-
-n_max_steps = config['n_max_steps']# maximum number of steps for finding a stable state
-selection_strength = config['selection_strength'] # strength of selection in the fitness function
-max_attempts = config['max_attempts'] # maximum number of attempts to generate an offspring from two parents
+from adjacency_class import AdjacencyMatrix
+import pandas as pd
 
 # Distances
 
@@ -34,17 +20,176 @@ def default_distance(s1, s2):
 
 # Fitnesses
 
-def default_fitness(distance):
+def default_fitness(distance, selection_strength = 0.1):
     """
     Compute the fitness based on the distance.
     """
     return np.exp(-distance**2 / selection_strength)
 
+# Perturbations functions
+
+def mutation_perturbation(matrix, rho_w):
+    """
+    Creates a matrix with a mutation perturbation with a non-zero entry
+    resampled from the distribution rho_w
+    Args:
+        matrix (np.array): weighted adjacency matrix
+        rho_w (simpy probability distribution): distribution from where weights are taken
+    Returns:
+        np.array: perturbed weighted adjacency matrix
+    """
+    non_zero_indices = np.argwhere(matrix != 0) # can be optimized
+    perturbed_mat = matrix.copy()
+
+    if non_zero_indices.size == 0:
+        return np.zeros_like(matrix)
+
+    # Randomly choose one of the non-zero indices
+    i, j = non_zero_indices[np.random.choice(len(non_zero_indices))]
+
+    perturbed_mat[i,j] = rho_w.rvs()
+
+    return perturbed_mat
+
+def pop_mutation_perturbation(pop,rho_w, repetitions):
+    """
+    Computes the proportion of mutation perturbations that lead the stable
+    state unchanged
+    * NOTE June 19 - This is highly under-optimized! ChatGPT does a bad job
+    at trying to do so because does not understand the context.
+    Args:
+        pop (list of AdjacencyMatrix): population to compute the perturbations
+        rho_w (simpy probability distribution): weight distribution
+        repetitions (int): number of perturbations per matrix
+    Returns:
+        float: proportion of perturbations that left the stable states unchanged
+    """
+    count = 0
+    for rep in range(repetitions):
+        dummy_matrix = AdjacencyMatrix(label = f'dummy{rep}')
+        for mat in pop:
+            if mat.stable_state is None: 
+                # Skip this matrix. If the matrix is unstable, then a mutation producing an stable matrix
+                # does not yield an epigenetic matrix. 
+                continue 
+            dummy_matrix.reset(label = dummy_matrix.label)
+            dummy_matrix.weighted_matrix = mutation_perturbation(mat.weighted_matrix, rho_w)
+            dummy_matrix.find_stable_state
+            if np.array_equal(dummy_matrix.stable_state, mat.stable_state):
+                count += 1
+    return count / (repetitions * len(pop))
+
+# def orthogonal_perturbation():
+
+# Data stuff
+
+def clear_csv_file_with_headers(csv_filename,headers):
+    """
+    Clears a csv and adds headers
+    """
+    with open(csv_filename, 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=headers)
+        writer.writeheader()
+
+def store_data_timeseries(objects,csv_filename,generation):
+    """
+    Adds rows to a csv file from a list of objects per generation
+    Args:
+        objects (list of AdjacencyMatrix): objects to take statistics from
+        csv_filename (str): name of the output file
+        generation (int): timestep associated with this recording 
+    """
+    n_nets = len(objects)
+    n_genes = objects[0].weighted_matrix.shape[0]
+    fitness_values = [mat.fitness for mat in objects]
+    path_lengths = [mat.path_length for mat in objects if mat.stable_state is not None]
+
+    # matrices = [mat.weighted_matrix for mat in objects]
+
+    unstable_states = sum(1 for mat in objects if mat.stable_state is None)
+
+    stats = {
+        'generation': generation,
+        'fitness_mean': np.mean(fitness_values),
+        'fitness_std': np.std(fitness_values),
+        'fitness_se': np.std(fitness_values) / np.sqrt(n_nets),
+
+        'unstable_states': unstable_states,
+        'perc_unstable': unstable_states / n_nets,
+
+        'path_mean': np.mean(path_lengths),
+        'path_std': np.std(path_lengths),
+        'path_se': np.std(path_lengths) / np.sqrt(n_nets)
+    }
+
+    file_exists = os.path.isfile(csv_filename)
+
+    with open(csv_filename, 'a', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=stats.keys())
+        # Write header only if file did not exist before
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow(stats)
+
+def store_data_comparison(initial,final, csv_filename, rho_w, repetitions):
+    n_genes = initial[0].n_nodes
+    # mutational stability
+
+    initital_mutation_stability = pop_mutation_perturbation(initial,rho_w, repetitions)
+    final_mutation_stability = pop_mutation_perturbation(final, rho_w, repetitions)
+
+    # orthogonal stability - June 18
+
+    # path lengths
+    initial_path = [mat.path_length for mat in initial]
+    initial_complete_path = [mat.path_length for mat in initial if mat.path_length is not None]
+    final_path = [mat.path_length for mat in final]
+    final_complete_path = [mat.path_length for mat in final if mat.path_length is not None]
+
+    stats = {
+        'mean_path_initial': np.mean(initial_complete_path),
+        'std_path_initial': np.std(initial_complete_path),
+        'se_path_initial': np.std(initial_complete_path) / np.sqrt(n_genes),
+
+        'mean_path_final': np.mean(final_complete_path),
+        'std_path_final': np.std(final_complete_path),
+        'se_path_final': np.std(final_complete_path) / np.sqrt(n_genes),
+
+        'perc_completion_initial': sum(1 for path in initial_path if path is not None) / len(initial_path),
+        'perc_completion_final': sum(1 for path in final_path if path is not None) / len(final_path),
+
+
+        'mutation_stability_initial': initital_mutation_stability,
+        'mutation_stability_final': final_mutation_stability    
+    }
+
+    file_exists = os.path.isfile(csv_filename)
+
+    with open(csv_filename, 'a', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=stats.keys())
+        # Write header only if file did not exist before
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow(stats)
+    
+def store_data_distributions(initial,final, csv_filename):
+    # path lengths
+    path_initial = np.array([mat.path_length for mat in initial])
+    path_final = np.array([mat.path_length for mat in final])
+
+    df = pd.DataFrame()
+    df['path_initial'] = path_initial
+    df['path_final'] = path_final
+
+    df.to_csv(csv_filename)    
+
 # Offspring generation and selection
 
 def generate_offspring(population_list, old_population,
-                       p_recombination=p_recombination, p_mutation=p_mutation,
-                       max_attempts=max_attempts, rng=np.random.default_rng(),
+                       p_recombination=0.5, p_mutation=0.1, n_max_steps = 100,
+                       max_attempts=100, rng=np.random.default_rng(), rho_w = norm(loc = 0, scale = 1),
                        distance_function=default_distance,
                        fitness_function=default_fitness,
                        unstable_fitness=0, verbose=False):
@@ -57,6 +202,8 @@ def generate_offspring(population_list, old_population,
         old_population (list): Contains AdjacencyMatrix objects. It will be used as the parents to generate offspring
         p_recombination (float): Probability of recombination.
         p_mutation (float): Probability of mutation for each edge. 
+        n_max_steps(int): Maximum number of steps to find a stable state
+        rho_w (scipy distribution): distribution to sample the edge weights (default Normal(0,1))
         max_attempts (int): Number of times it will try to find a child that survives from a pair of parents
         rng (np.random.Generator): Optimized random number generator
         distance_function (function): Computes a distance measure between two vectors
@@ -103,7 +250,7 @@ def generate_offspring(population_list, old_population,
             child.reset(label=child.label, n_nodes=n_nodes,
                         weighted_matrix=new_adj, fitness=0,
                         stable_state=None, target_state=pa.target_state,
-                        initial_state=pa.initial_state)
+                        initial_state=pa.initial_state, path_length = 0)
 
             child.find_stable_state(n_steps=n_max_steps) # This is the bottleneck!
             child.compute_fitness(distance_function, fitness_function, unstable_fitness)
@@ -114,80 +261,103 @@ def generate_offspring(population_list, old_population,
             if not survived and attempts >= max_attempts:
                 if verbose:
                     print(f"Child {k}: max attempts reached from {pa.label} & {pb.label}. Redrawing.")
-                pa = old_population[rng.integers(0, N_parents)].weighted_matrix
-                pb = old_population[rng.integers(0, N_parents)].weighted_matrix
+                pa = old_population[rng.integers(0, N_parents)]
+                pb = old_population[rng.integers(0, N_parents)]
                 attempts = 0
 
-def clear_csv_file_with_headers(csv_filename,headers):
+def run_simulation(config, timeseries_filename=False): 
     """
-    Clears a csv and adds headers
+    Runs the simulations given a set of parameters and returns the initial
+    and final populations. 
+        *June 17 - allow for not-fully connected matrix generator
+    Args
+        config (dict): dictionary with the simulation parameters
+        timeseries_filename(str or bool): 
+            If a string, it will store the data into a csv file of the timeseries data.
+            It won't do anything otherwise
+    Returns
+        initial_objects, final_objects (lists): lists of objects corresponding to the inital and
+            final populations of the GRNs
     """
-    with open(csv_filename, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=headers)
-        writer.writeheader()
 
-def store_data_instant(objects,csv_filename,generation):
-    """
-    Generates a csv data collected from a list of objects at a
-    particular instance.
-    Args:
-        objects (list of AdjacencyMatrix): objects to take statistics from
-        csv_filename (str): name of the output file
-        generation (int): timestep associated with this recording 
-    """
-    n_nets = len(objects)
-    n_genes = objects[0].weighted_matrix.shape[0]
-    fitness_values = [mat.fitness for mat in objects]
-    # matrices = [mat.weighted_matrix for mat in objects]
+    # Parameters
+    n_genes = config['n_genes'] # probability of a gene being expressed
+    N_nets = config['N_nets'] # how many nets are in the population
+    n_generations = config['n_generations'] # generations per simulation
+    c_connection = config['c_connection'] # fraction of connections
+    p_mutation = 1/ (c_connection * n_genes**2) # probability of mutations
+    p_recombination = config['p_recombination']
 
-    unstable_states = sum(1 for mat in objects if mat.stable_state is None)
+    mu = config['mu']
+    sigma = config['sigma']
+    rho_w = config['rho_w'](loc = mu, scale = sigma) # weight distribution
 
-    stats = {
-        'generation': generation,
-        'fitness_mean': np.mean(fitness_values),
-        'fitness_min': np.min(fitness_values),
-        'fitness_max': np.max(fitness_values),
-        'fitness_std': np.std(fitness_values),
+    n_max_steps = config['n_max_steps']# maximum number of steps for finding a stable state
+    selection_strength = config['selection_strength'] # strength of selection in the fitness function
+    max_attempts = config['max_attempts'] # maximum number of attempts to generate an offspring from two parents
 
-        'fitness_p5': np.percentile(fitness_values,5),
-        'fitness_p95': np.percentile(fitness_values,95),
-        'fitness_p10': np.percentile(fitness_values,10),
-        'fitness_p25': np.percentile(fitness_values,25),
-        'fitness_p75': np.percentile(fitness_values,75),
-        'fitness_p90': np.percentile(fitness_values,90),
+    # Initialize the system
 
-        'unstable_states': unstable_states,
-        'n_nets': n_nets,
-        'n_genes': n_genes
-    }
+    target_state = np.random.choice([1,-1], size = (n_genes))
+    initial_state = np.random.choice([1,-1], size = (n_genes))
 
-    file_exists = os.path.isfile(csv_filename)
+    initial_pop = [] # Store a copy of the inital configuration!
+    current_pop = []
+    old_pop = []
 
-    with open(csv_filename, 'a', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=stats.keys())
+    for i in range(N_nets):
+        # Initialize random matrices from samples of a randomly sampled matrix
+        # Deviation from Wagner! -- I am not imposing a founder population. Let's
+        # see if that allows for convergence
 
-        # Write header only if file did not exist before
-        if not file_exists:
-            writer.writeheader()
+        # NOTE: Fully connected inital matrix - to edit with a different inital adjacency matrix
+        adjacency_matrix = np.random.choice([0, 1], size=(n_genes, n_genes), p=[1 - c_connection, c_connection])
+        normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+        random_matrix = adjacency_matrix * normal_matrix
 
-        writer.writerow(stats)
+        initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                        weighted_matrix= random_matrix, fitness = None,
+                                        stable_state = None, target_state = target_state,
+                                        initial_state = initial_state))
+        old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                        weighted_matrix= random_matrix, fitness = None,
+                                        stable_state = None, target_state = target_state,
+                                        initial_state = initial_state))
+        current_pop.append(AdjacencyMatrix(label = f"C{i}"))
 
-    # matrix operations and perturbations
+    # Evolution: Loop in stages
 
-# def store_data_10gen(objects, csv_filename, timestep)
+    ## Calculate initial statistics
 
-    
+    for mat in old_pop:
+        mat.find_stable_state(n_max_steps,activation_function = np.sign)
+        mat.compute_fitness(default_distance,default_fitness, np.exp(-1/selection_strength))
 
-## Future functions
+    for mat in initial_pop:
+        mat.find_stable_state(n_max_steps,activation_function = np.sign)
+        mat.compute_fitness(default_distance,default_fitness, np.exp(-1/selection_strength))
 
-# Perturbations functions
+    if timeseries_filename is not None:
+        store_data_timeseries(old_pop,timeseries_filename,0)
 
-# def mutation_perturbation():
+    for generation in range(n_generations):
 
-# def orthogonal_perturbation():
+        # Generate offspring from the generation
+        # Fitness calculation is already in the generate offspring function
+        generate_offspring(population_list = current_pop, old_population = old_pop,
+                        p_recombination=p_recombination, max_attempts = max_attempts,
+                        p_mutation=p_mutation, distance_function=default_distance,
+                        fitness_function= default_fitness, unstable_fitness= np.exp(-1/selection_strength))
+        # Bottleneck in this function. find_stable_state takes a lot of time. 
+        # Might need to change the whole function to introduce parallelization!
+        if timeseries_filename is not None:
+            store_data_timeseries(current_pop, timeseries_filename, generation+1)
 
+        # Transfer offspring into old list and clear list
+        for idx in range(N_nets): # Complexity O(N)
+            old_pop[idx].transfer_values(current_pop[idx])
+            current_pop[idx].reset(label = current_pop[idx].label)
 
-# Analysis functions
+    return initial_pop, old_pop
 
-# def path_length():
 

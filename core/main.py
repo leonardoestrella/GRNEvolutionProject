@@ -16,7 +16,6 @@ from scipy.stats import norm
 from params import config
 from adjacency_class import AdjacencyMatrix
 from utils import default_distance, default_fitness, generate_offspring, store_data_instant, clear_csv_file_with_headers
-import matplotlib.pyplot as plt
 
 # Write down the parameters
 
@@ -42,20 +41,22 @@ p_recombination = config['p_recombination']
 
 N_nets = config['N_nets']
 n_generations = config['n_generations']
+n_simulations = config['n_simulations']
+
+headers = [
+        'generation',
+        'fitness_mean', 'fitness_median','fitness_min', 'fitness_max', 'fitness_std',
+        'fitness_p5', 'fitness_p10', 'fitness_p25', 'fitness_p75', 'fitness_p90', 'fitness_p95',
+        'unstable_states', 'n_nets', 'n_genes',
+        'path_mean','path_median','path_std','path_p5','path_p95'
+    ]
+
+clear_csv_file_with_headers("analysis/summary_stats.csv", headers) # Clear csv
 
 # Initialize the system
 
 target_state = np.random.choice([1,-1], size = (n_genes))
 initial_state = np.random.choice([1,-1], size = (n_genes))
-
-
-headers = [
-        'generation',
-        'fitness_mean', 'fitness_min', 'fitness_max', 'fitness_std',
-        'fitness_p5', 'fitness_p10', 'fitness_p25', 'fitness_p75', 'fitness_p90', 'fitness_p95',
-        'unstable_states', 'n_nets', 'n_genes'
-    ]
-clear_csv_file_with_headers("analysis/summary_stats.csv", headers) # Clear csv
 
 current_pop = []
 old_pop = []

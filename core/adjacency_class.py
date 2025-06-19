@@ -46,35 +46,7 @@ class AdjacencyMatrix:
 
     # Operations
 
-    # NOTE - June 13. These require to handle weighted values, previously implemented
-    # as directed, unweighted edges in lists. 
-
-    # These are non-useful. I have to change them to add weighted edges
- 
-    # def remove_directed_edge(self, edge): #source is itself
-    #     # I don't think I have used these
-    #     """
-    #     Remove an edge from the adjacency matrix.
-    #     Args:
-    #         edge (tuple): A tuple representing the edge to be removed (source, target).
-    #     """
-    #     if edge in self.edges:
-    #         self.edges.remove(edge)
-    #     else:
-    #         raise ValueError(f"Edge {edge} not found in the adjacency matrix.")
-        
-    # def add_directed_edge(self, edge):
-    #     """
-    #     Add an edge to the adjacency matrix.
-    #     Args:
-    #         edge (tuple): A tuple representing the edge to be added (source, target).
-    #     """
-    #     if edge not in self.edges:
-    #         self.edges.append(edge)
-    #     else:
-    #         raise ValueError(f"Edge {edge} already exists in the adjacency matrix.")
-    
-    def transfer_values(self, other_matrix): # PAUSE JUNE 12 - FIGURE OUT HOW WILL THE OFFSPRING GENERATION WORK
+    def transfer_values(self, other_matrix): 
         """
         Transfer the values from another adjacency matrix to this one conserving
         its own label
@@ -132,17 +104,19 @@ class AdjacencyMatrix:
             activation_function (function): Activation function to apply to the state.
         """
         current_state = np.copy(self.initial_state)
+        self.path_length = 0
         for step in range(n_steps):
             new_state = self.step_forward(current_state, activation_function)
 
             # Check if the new state is stable
             if np.array_equal(new_state, current_state):
                 self.stable_state = new_state
-                self.path_length = step + 1 #In step 0, we already evolved the state once!
+                self.path_length = step
                 return
             current_state = new_state
         # If we reach here, it means we did not find a stable state within n_steps
         self.stable_state = None
+        self.path_length = None
 
     # Evolution
    
