@@ -34,7 +34,7 @@ def mutation_perturbation(matrix, rho_w):
     resampled from the distribution rho_w
     Args:
         matrix (np.array): weighted adjacency matrix
-        rho_w (simpy probability distribution): distribution from where weights are taken
+        rho_w (scipy probability distribution): distribution from where weights are taken
     Returns:
         np.array: perturbed weighted adjacency matrix
     """
@@ -45,13 +45,18 @@ def mutation_perturbation(matrix, rho_w):
         return np.zeros_like(matrix)
 
     # Randomly choose one of the non-zero indices
+    #print(f"Unperturbed matrix:\n{perturbed_mat}")
     i, j = non_zero_indices[np.random.choice(len(non_zero_indices))]
+    resample = rho_w.rvs()
+    #print(f"Chosen indexes{i,j}")
+    #print(f"Resampled weight: {resample}")
 
-    perturbed_mat[i,j] = rho_w.rvs()
-
+    perturbed_mat[i,j] = resample
+    #print(f"Perturbed matrix: {perturbed_mat}")
+    
     return perturbed_mat
 
-def pop_mutation_perturbation(pop,rho_w, repetitions):
+def pop_mutation_perturbation(pop,rho_w, repetitions, n_max_steps):
     """
     Computes the proportion of mutation perturbations that lead the stable
     state unchanged
@@ -61,6 +66,7 @@ def pop_mutation_perturbation(pop,rho_w, repetitions):
         pop (list of AdjacencyMatrix): population to compute the perturbations
         rho_w (simpy probability distribution): weight distribution
         repetitions (int): number of perturbations per matrix
+        n_max_steps (int): maximum number of steps to find a stable state
     Returns:
         float: proportion of perturbations that left the stable states unchanged
     """
@@ -72,9 +78,14 @@ def pop_mutation_perturbation(pop,rho_w, repetitions):
                 # Skip this matrix. If the matrix is unstable, then a mutation producing an stable matrix
                 # does not yield an epigenetic matrix. 
                 continue 
-            dummy_matrix.reset(label = dummy_matrix.label)
+            dummy_matrix.reset(label = dummy_matrix.label, n_nodes = mat.n_nodes,
+                               weighted_matrix = np.zeros((mat.n_nodes, mat.n_nodes)),
+                               fitness = 0, stable_state = None,
+                               target_state = mat.target_state,
+                               initial_state = mat.initial_state,
+                               path_length = 0)
             dummy_matrix.weighted_matrix = mutation_perturbation(mat.weighted_matrix, rho_w)
-            dummy_matrix.find_stable_state
+            dummy_matrix.find_stable_state(n_steps = n_max_steps)
             if np.array_equal(dummy_matrix.stable_state, mat.stable_state):
                 count += 1
     return count / (repetitions * len(pop))
@@ -100,7 +111,7 @@ def store_data_timeseries(objects,csv_filename,generation):
         generation (int): timestep associated with this recording 
     """
     n_nets = len(objects)
-    n_genes = objects[0].weighted_matrix.shape[0]
+    #n_genes = objects[0].weighted_matrix.shape[0]
     fitness_values = [mat.fitness for mat in objects]
     path_lengths = [mat.path_length for mat in objects if mat.stable_state is not None]
 
@@ -132,12 +143,12 @@ def store_data_timeseries(objects,csv_filename,generation):
 
         writer.writerow(stats)
 
-def store_data_comparison(initial,final, csv_filename, rho_w, repetitions):
+def store_data_comparison(initial,final, csv_filename, rho_w, repetitions, n_max_steps):
     n_genes = initial[0].n_nodes
     # mutational stability
 
-    initital_mutation_stability = pop_mutation_perturbation(initial,rho_w, repetitions)
-    final_mutation_stability = pop_mutation_perturbation(final, rho_w, repetitions)
+    initital_mutation_stability = pop_mutation_perturbation(initial,rho_w, repetitions, n_max_steps)
+    final_mutation_stability = pop_mutation_perturbation(final, rho_w, repetitions, n_max_steps)
 
     # orthogonal stability - June 18
 
@@ -186,6 +197,156 @@ def store_data_distributions(initial,final, csv_filename):
     df.to_csv(csv_filename)    
 
 # Offspring generation and selection
+
+def find_random_stable_matrix(matrix, rho_w, mask,n_max_steps):
+    """
+    Finds a stable matrices by generating random fully connected matrices
+    with weights from a normal distribution N(0,1)
+    Args:
+        matrix (AdjacencyMatrix): Object to store the stable matrix in
+        rho_w (scipy distribution): distribution to sample the edge weights (default Normal(0,1))
+        mask (np.array): binary matrix indicating the presence of edges
+    """
+    n_genes = matrix.n_nodes
+    while matrix.stable_state is None:
+        random_matrix = rho_w.rvs(size = (n_genes,n_genes)) * mask
+        matrix.reset(label = matrix.label, n_nodes = n_genes,
+                     weighted_matrix=random_matrix, fitness=0,
+                     stable_state=None, target_state=matrix.target_state,
+                     initial_state=matrix.initial_state, path_length = 0)
+        matrix.find_stable_state(n_steps=n_max_steps)
+
+def initialize_population(initial_pop, old_pop, current_pop, mode, config, initial_state, target_state):
+    """
+    Args:
+        initial_pop, old_pop, current_pop (list): lists to be filled with AdjacencyMatrix objects
+        mode (str): 'full' for fully connected, 'sparse' for a given connection
+            probability (c_connection in config)
+        config (dict): dictionary with the simulation parameters
+        initial_state,target_state (np.array): initial and target states for the evolution of GRNs
+    """
+        # Parameters
+    n_genes = config['n_genes'] # probability of a gene being expressed
+    N_nets = config['N_nets'] # how many nets are in the population
+    c_connection = config['c_connection'] # fraction of connections
+
+    mu = config['mu']
+    sigma = config['sigma']
+    rho_w = config['rho_w'](loc = mu, scale = sigma) # weight distribution
+
+    n_max_steps = config['n_max_steps'] # maximum number of stpes to find a stable state
+
+    if mode == "full":
+        for i in range(N_nets):
+            # No founder population!
+            normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+
+            initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= normal_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= normal_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    elif mode == "sparse":
+        for i in range(N_nets):
+            # No founder population!
+
+            adjacency_matrix = np.random.choice([0, 1], size=(n_genes, n_genes), p=[1 - c_connection, c_connection])
+            normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+            random_matrix = adjacency_matrix * normal_matrix
+
+            initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= random_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= random_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    elif mode == "stable,full":
+        for i in range(N_nets):
+            # Stable initial population
+            normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+
+            matrix = AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= normal_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state)
+            find_random_stable_matrix(matrix,rho_w, np.ones((n_genes,n_genes)), n_max_steps)
+
+            initial_pop.append(matrix)
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= matrix.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    elif mode == "stable,sparse":
+        for i in range(N_nets):    # Stable initial population, sparse matrices   
+            adjacency_matrix = np.random.choice([0, 1], size=(n_genes, n_genes), p=[1 - c_connection, c_connection])
+            normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+            random_matrix = adjacency_matrix * normal_matrix
+
+            matrix = AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= random_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state)
+            find_random_stable_matrix(matrix,rho_w, np.ones((n_genes,n_genes)), n_max_steps)
+
+            initial_pop.append(matrix)
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= matrix.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+        
+    elif mode == "founder,full":
+        normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+        founder = AdjacencyMatrix(label = 'I0', n_nodes = n_genes,
+                                            weighted_matrix= normal_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state)
+        find_random_stable_matrix(founder,rho_w, np.ones((n_genes,n_genes)), n_max_steps)
+        founder.target_state = founder.stable_state
+        for i in range(N_nets):
+            initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= founder.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = founder.target_state,
+                                            initial_state = founder.initial_state))
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= founder.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = founder.target_state,
+                                            initial_state = founder.initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    elif mode == "founder,sparse":
+
+        adjacency_matrix = np.random.choice([0, 1], size=(n_genes, n_genes), p=[1 - c_connection, c_connection])
+        normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
+        random_matrix = adjacency_matrix * normal_matrix
+
+        founder = AdjacencyMatrix(label = 'founder', n_nodes = n_genes,
+                                            weighted_matrix= random_matrix, fitness = None,
+                                            stable_state = None, target_state = target_state,
+                                            initial_state = initial_state)
+        
+        find_random_stable_matrix(founder,rho_w, np.ones((n_genes,n_genes)), n_max_steps)
+
+        founder.target_state = founder.stable_state
+        for i in range(N_nets):
+            initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
+                                            weighted_matrix= founder.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = founder.target_state,
+                                            initial_state = founder.initial_state))
+            old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
+                                            weighted_matrix= founder.weighted_matrix, fitness = None,
+                                            stable_state = None, target_state = founder.target_state,
+                                            initial_state = founder.initial_state))
+            current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    else: 
+        raise ValueError("Initialization mode not recognized")
 
 def generate_offspring(population_list, old_population,
                        p_recombination=0.5, p_mutation=0.1, n_max_steps = 100,
@@ -265,7 +426,7 @@ def generate_offspring(population_list, old_population,
                 pb = old_population[rng.integers(0, N_parents)]
                 attempts = 0
 
-def run_simulation(config, timeseries_filename=False): 
+def run_simulation(config, initial_state, target_state, timeseries_filename=False): 
     """
     Runs the simulations given a set of parameters and returns the initial
     and final populations. 
@@ -275,6 +436,7 @@ def run_simulation(config, timeseries_filename=False):
         timeseries_filename(str or bool): 
             If a string, it will store the data into a csv file of the timeseries data.
             It won't do anything otherwise
+        initial_state, target_state (np.array): initial and target states for the evolution of GRNs
     Returns
         initial_objects, final_objects (lists): lists of objects corresponding to the inital and
             final populations of the GRNs
@@ -295,35 +457,12 @@ def run_simulation(config, timeseries_filename=False):
     n_max_steps = config['n_max_steps']# maximum number of steps for finding a stable state
     selection_strength = config['selection_strength'] # strength of selection in the fitness function
     max_attempts = config['max_attempts'] # maximum number of attempts to generate an offspring from two parents
-
-    # Initialize the system
-
-    target_state = np.random.choice([1,-1], size = (n_genes))
-    initial_state = np.random.choice([1,-1], size = (n_genes))
-
+    init_mode = config['init_mode']
     initial_pop = [] # Store a copy of the inital configuration!
     current_pop = []
     old_pop = []
 
-    for i in range(N_nets):
-        # Initialize random matrices from samples of a randomly sampled matrix
-        # Deviation from Wagner! -- I am not imposing a founder population. Let's
-        # see if that allows for convergence
-
-        # NOTE: Fully connected inital matrix - to edit with a different inital adjacency matrix
-        adjacency_matrix = np.random.choice([0, 1], size=(n_genes, n_genes), p=[1 - c_connection, c_connection])
-        normal_matrix = rho_w.rvs(size = (n_genes,n_genes))
-        random_matrix = adjacency_matrix * normal_matrix
-
-        initial_pop.append(AdjacencyMatrix(label = f'I{i}', n_nodes = n_genes,
-                                        weighted_matrix= random_matrix, fitness = None,
-                                        stable_state = None, target_state = target_state,
-                                        initial_state = initial_state))
-        old_pop.append(AdjacencyMatrix(label = f'O{i}', n_nodes = n_genes,
-                                        weighted_matrix= random_matrix, fitness = None,
-                                        stable_state = None, target_state = target_state,
-                                        initial_state = initial_state))
-        current_pop.append(AdjacencyMatrix(label = f"C{i}"))
+    initialize_population(initial_pop, old_pop, current_pop, init_mode, config, initial_state, target_state)
 
     # Evolution: Loop in stages
 
@@ -341,6 +480,8 @@ def run_simulation(config, timeseries_filename=False):
         store_data_timeseries(old_pop,timeseries_filename,0)
 
     for generation in range(n_generations):
+        if generation % 40 == 0:
+            print(f"\t Generation {generation+1} out of {n_generations}")
 
         # Generate offspring from the generation
         # Fitness calculation is already in the generate offspring function

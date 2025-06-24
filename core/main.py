@@ -21,6 +21,8 @@ from utils import clear_csv_file_with_headers, run_simulation, store_data_compar
 # how many times the simulation will run
 n_simulations = config['n_simulations']
 n_genes = config['n_genes']
+n_max_steps = config['n_max_steps']
+mode = config['init_mode']
 
 headers_comparison = ['mean_path_initial', 'std_path_initial', 'se_path_initial', 'mean_path_final',
                       'std_path_final','se_path_final', 'perc_completion_initial','perc_completion_final',
@@ -36,21 +38,23 @@ clear_csv_file_with_headers("analysis/distributions.csv", headers_distributions)
 timeseries = "analysis/timeseries.csv"
 distributions = "analysis/distributions.csv"
 
-repetitions = 10 # To be put in the parameters file
+repetitions = 10 # NOTE To be put in the parameters file
 
 for simulation in range(n_simulations):
 
     # Initialize the system
+    
+    print(f"Running simulation {simulation+1} out of {n_simulations}, mode = {mode}")
 
     target_state = np.random.choice([1,-1], size = (n_genes))
     initial_state = np.random.choice([1,-1], size = (n_genes))
 
-    initial_pop, final_pop = run_simulation(config, timeseries_filename=timeseries)
+    initial_pop, final_pop = run_simulation(config, initial_state, target_state, timeseries_filename=timeseries) # NOTE target and initial should be inputs
     timeseries = None
 
     rho_w = config['rho_w'](loc = config['mu'], scale = config['sigma'])
 
-    store_data_comparison(initial_pop, final_pop, "analysis/initial_final.csv", rho_w, repetitions)
+    store_data_comparison(initial_pop, final_pop, "analysis/initial_final.csv", rho_w, repetitions, n_max_steps)
         ## path_lenghts
         ## mutational and orthogonal stability 
     if distributions is not None:

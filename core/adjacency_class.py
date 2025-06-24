@@ -111,7 +111,7 @@ class AdjacencyMatrix:
             # Check if the new state is stable
             if np.array_equal(new_state, current_state):
                 self.stable_state = new_state
-                self.path_length = step
+                self.path_length = step 
                 return
             current_state = new_state
         # If we reach here, it means we did not find a stable state within n_steps
