@@ -5,392 +5,7 @@ module CustomStats
     include("WagnerAlgorithm.jl")
     import .BooleanNetwork: reg_mutation!, con_mutation!, develop
 
-export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributions, summarize_experiment_data, mut_robustness_population, path_mat_analysis_plot, noise_comparison_timeseries_plot
-
-    """
-    --------------------------
-    PLOTTING
-    -------------------------
-    """
-
-    """
-    plot_timeseries_summary: Plot a summary of time series data using average, median, and standard deviation.
-
-    args:
-    - `avg`: Vector of average values over time.
-    - `med`: Vector of median values over time.
-    - `stddev`: Vector of standard deviations over time.
-
-    kwargs:
-    - `time`: Vector of time points (defaults to `1:length(avg)`).
-    - `ylabel`: Label for the y-axis (default: "").
-    - `xlabel`: Label for the x-axis (default: "").
-    - `label_prefix`: String prefix added to legend labels (default: "").
-    - `color`: Color for the average line and ribbon (default: `:blue`).
-    - `plt`: Existing plot object to add to (optional).
-
-    returns:
-    - A plot object showing:
-        - The average line with a ±2 standard deviation ribbon.
-        - The median as a dashed black line.
-    """
-
-    function plot_timeseries_summary(avg,med,stddev;
-                                    time=nothing,
-                                    ylabel="",
-                                    xlabel="",
-                                    label_prefix="",
-                                    color=:blue,
-                                    plt=nothing)
-        n = size(avg)[1]
-        if isnothing(time)
-                time = 1:n
-        end
-
-        # Use provided plot or start a new one
-        plt = isnothing(plt) ? plot() : plt
-
-        # Plot mean with ±2σ ribbon
-        plot!(plt, time, avg, ribbon=2*stddev, fillalpha=0.2, lw=2,
-                color=color, label="$label_prefix Mean ±2 SD")
-
-        # Plot median as dashed line
-        plot!(plt, time, med, linestyle=:dash, lw=2, color=:black, label="$label_prefix Median")
-        plot!(plt, legend=:topright)
-        # Label y-axis
-        ylabel!(plt, ylabel)
-        xlabel!(plt, xlabel)
-
-        return plt
-    end
-
-    """
-    fit_path_stable_plot: Generate a multi-panel plot summarizing evolutionary time series data, including fitness, path length, stability, and edge density.
-
-    args:
-    - `avg_fitnesses`: Vector of average fitness values over generations.
-    - `std_fitnesses`: Vector of standard deviations of fitness values.
-    - `avg_path`: Vector of average path lengths over generations.
-    - `std_path`: Vector of standard deviations of path lengths.
-    - `completion`: Vector of fractions (0–1) of stable matrices per generation.
-    - `avg_density`: Vector of average edge densities over generations.
-    - `std_density`: Vector of standard deviations of edge densities.
-    - `safe_title`: A string used to construct the output filename (should be file-system safe).
-    - `path`: Directory path where the figure will be saved.
-    - `plot_title`: Title for the fitness plot.
-    - `cpal`: A vector of color values used for plotting each series.
-
-    kwargs:
-    - `show_fig`: Whether to display the figure (default: `false`).
-
-    behavior:
-    Generates and saves a 4-row subplot figure including:
-    1. **Fitness**: Mean ± 2σ with ribbon.
-    2. **Path Length**: Mean ± 2σ with ribbon.
-    3. **Stability**: Proportion of stable matrices as scatter points.
-    4. **Edge Density**: Mean ± 2σ with ribbon.
-
-    The figure is saved as a PNG to the given `path` with a filename based on `safe_title`.
-
-    returns
-    - Nothing. Saves and optionally displays the plot.
-    """
-    function fit_path_stable_plot(
-        avg_fitnesses,std_fitnesses, avg_path, 
-        std_path,completion,avg_density, std_density,
-        safe_title,path,plot_title, cpal; 
-        show_fig = false)
-
-        generations = size(avg_fitnesses,1)
-
-        p1 = plot(1:generations, avg_fitnesses, 
-            ribbon = 2 .* std_fitnesses, seriestype = :line,
-            markersize = 1, alpha = 0.7, title = plot_title,
-            ylabel = "Fitness", legend = :topright,
-            label = "Average Fitness ± 2σ",
-            color = cpal[1], left_margin=6Plots.mm, top_margin = 5Plots.mm)
-
-        p2 = plot(1:generations, avg_path, 
-            ribbon = 2 .* std_path, seriestype = :line,
-            markersize = 1, alpha = 0.7,
-            ylabel = "Path Length", legend = :topright,
-            label = "Average Path Length ± 2σ",
-            color = cpal[3], left_margin=6Plots.mm)
-
-        p3 = plot(1:generations, completion, 
-            seriestype = :scatter, legend = :topright,
-            markersize = 3, alpha = 0.7,
-            ylabel = "% of Stable Matrices",
-            color = cpal[5], ylims = (-0.1, 1.1), left_margin=6Plots.mm)
-
-        p4 = plot(1:generations, avg_density, 
-            ribbon = 2 .* std_density, seriestype = :line,
-            markersize = 1, alpha = 0.7, xlabel = "Generation",
-            ylabel = "Density of Edges", legend = :topright,
-            label = "Average Density ± 2σ",
-            color = cpal[7], left_margin=6Plots.mm, bottom_margin = 6Plots.mm)
-
-        # Combine into a single layout
-        layout = @layout([a; b; c; d])
-        final_plot = plot(p1, p2, p3, p4; layout=layout, size=(800, 1200))
-
-        savefig(final_plot, "$path$(safe_title)_timeseries1.png")
-        # Display in notebook
-        if show_fig
-            display(final_plot)
-        end
-    end
-
-    """
-    A very similar plot to fit_path_stable_plot, but with a comparison between
-    noisy and non-noisy development
-    """
-    function noise_comparison_timeseries_plot(
-        avg_fitnesses, std_fitnesses, avg_path,
-        std_path, completion, avg_density, std_density,
-        avg_fit_noiseless, std_fit_noiseless,
-        avg_path_noiseless, std_path_noiseless,
-        noiseless_completion,
-        safe_title, path, plot_title, cpal;
-        show_fig=false)
-
-        generations = size(avg_fitnesses, 1)
-
-        p1 = plot(1:generations, avg_fitnesses,
-            ribbon=2 .* std_fitnesses, seriestype=:line,
-            markersize=1, alpha=0.6, title=plot_title,
-            ylabel="Fitness", legend=:topright,
-            label="Noisy Average Fitness ± 2σ",
-            color=cpal[1], left_margin=6Plots.mm, top_margin=5Plots.mm)
-
-        plot!(p1, 1:generations, avg_fit_noiseless,
-            ribbon=2 .* std_fit_noiseless, seriestype=:line, lynestyle=:dash,
-            markersize=1, alpha=0.6,
-            ylabel="Fitness", legend=:topright,
-            label="Noiseless Average Fitness ± 2σ",
-            color=cpal[8], left_margin=6Plots.mm, top_margin=5Plots.mm)
-
-        p2 = plot(1:generations, avg_path,
-            ribbon=2 .* std_path, seriestype=:line,
-            markersize=1, alpha=0.6,
-            ylabel="Path Length", legend=:topright,
-            label="Noisy Average Path Length ± 2σ",
-            color=cpal[2], left_margin=6Plots.mm)
-
-        plot!(p2, 1:generations, avg_path_noiseless,
-            ribbon=2 .* std_path_noiseless, seriestype=:line, lynestyle=:dash,
-            markersize=1, alpha=0.6,
-            ylabel="Path Length", legend=:topright,
-            label="Noiseless Average Path Length ± 2σ",
-            color=cpal[10], left_margin=6Plots.mm, top_margin=5Plots.mm)
-
-        p3 = plot(1:generations, completion,
-            seriestype=:scatter, legend=:topright,
-            markersize=3, alpha=0.6,
-            ylabel="% of Stable Matrices",
-            label="Noisy Development",
-            color=cpal[3], ylims=(-0.1, 1.1), left_margin=6Plots.mm)
-
-        plot!(p3, 1:generations, noiseless_completion,
-            seriestype=:scatter, markershape=:utriangle,
-            markersize=3, alpha=0.5,
-            ylabel="Completion", legend=:topright,
-            label="Noiseless Development",
-            color=cpal[12], left_margin=6Plots.mm, top_margin=5Plots.mm)
-
-        p4 = plot(1:generations, avg_density,
-            ribbon=2 .* std_density, seriestype=:line,
-            markersize=1, alpha=0.7, xlabel="Generation",
-            ylabel="Density of Edges", legend=:topright,
-            label="Average Density ± 2σ",
-            color=cpal[7], left_margin=6Plots.mm, bottom_margin=6Plots.mm)
-
-        # Combine into a single layout
-        layout = @layout([a; b; c; d])
-        final_plot = plot(p1, p2, p3, p4; layout=layout, size=(800, 1200))
-
-        savefig(final_plot, "$path$(safe_title)_timeseries1.png")
-        # Display in notebook
-        if show_fig
-            display(final_plot)
-        end
-    end
-
-    """
-    path_mat_analysis_plot: Generate a multi-panel plot summarizing evolutionary time series data, including fitness, path length, stability, and edge density.
-
-    args:
-    - `avg_rob`: Vector of average mutational robustness values over generations.
-    - `std_rob`: Vector of standard deviations of mut robustness values.
-    - `safe_title`: A string used to construct the output filename (should be file-system safe).
-    - `path`: Directory path where the figure will be saved.
-    - `plot_title`: Title for the fitness plot.
-    - `cpal`: A vector of color values used for plotting each series.
-
-    kwargs:
-    - `show_fig`: Whether to display the figure (default: `false`).
-
-    behavior:
-    Generates and saves a 4-row subplot figure including:
-    1. **Mutational Robustness**: Mean ± 2σ with ribbon.
-
-    The figure is saved as a PNG to the given `path` with a filename based on `safe_title`.
-
-    returns
-    - Nothing. Saves and optionally displays the plot.
-    """
-    function path_mat_analysis_plot(
-        avg_rob_mut,std_rob_mut,
-        avg_rob_con, std_rob_con,
-        safe_title,path,plot_title, cpal; 
-        show_fig = false)
-
-        generations = size(avg_rob_mut,1)
-        p1 = plot(1:generations, avg_rob_mut, 
-            ribbon = 2 .* std_rob_mut, seriestype = :line,
-            markersize = 1, alpha = 0.7, title = plot_title,
-            ylabel = "Mutational Robustness", legend = :topright,
-            label = "Average Mutational Robustness ± 2σ",
-            color = cpal[9], left_margin=6Plots.mm)
-        p2 = plot(1:generations, avg_rob_con,
-            ribbon=2 .* std_rob_con, seriestype=:line,
-            markersize=1, alpha=0.7, title=plot_title,
-            ylabel="Connectivity Robustness", xlabel="Generation", legend=:topright,
-            label="Average Connectivity Robustness ± 2σ",
-            color=cpal[13], left_margin=6Plots.mm, bottom_margin=6Plots.mm)
-
-        # Combine into a single layout
-        layout = @layout([a; b])
-        final_plot = plot(p1, p2; layout=layout, size=(800, 600))
-        
-        savefig(final_plot, "$path$(safe_title)_timeseries2.png")
-        # Display in notebook
-        if show_fig
-            display(final_plot)
-        end
-    end
-
-    """
-    compare_distributions: 
-    Plot a histogram comparing two distributions
-
-    args:
-    - `distribution1`: Vector of initial path lengths (cannot include `nothing` for unstable cases).
-    - `distribution2`: Vector of final path lengths (cannot include `nothing` for unstable cases).
-    - `plot_title`: Title of the plot 
-    - `safe_title`: A string used to construct the output filename (should be file-system safe).
-    - `path`: Directory path where the plot image will be saved.
-    - `cpal`: Color palette used for the histogram bars (expects at least two colors).
-
-    kwargs
-    - `show_fig`: Whether to display the figure after saving (default: `false`).
-
-    behavior
-    - Filters out `nothing` values (unstable cases) from both path length vectors.
-    - Plots overlapping histograms of the initial and final path lengths, normalized as PDFs.
-    - Saves the figure as `safe_title_histogram.png` in the given `path`.
-
-    returns
-    - Nothing. Saves and optionally displays the plot.
-    """
-
-    function compare_distributions(distribution1, distribution2,
-                            plot_title, lab1, lab2,
-                            safe_title, path,
-                            cpal, num_bins; show_fig = false)
-
-        # Filter out `nothing` values
-        filtered1 = filter(!isnothing, distribution1)
-        filtered2 = filter(!isnothing, distribution2)
-
-        N1 = length(filtered1)
-        N2 = length(filtered2)
-
-        # Determine bin edges and xticks
-        if N1 > 0 && N2 > 0
-            m1, n1 = maximum(filtered1), minimum(filtered1)
-            m2, n2 = maximum(filtered2), minimum(filtered2)
-            max_bins = maximum([m1, m2])
-            min_bins = minimum([n1, n2])
-        elseif N1 > 0
-            max_bins = maximum(filtered1)
-            min_bins = minimum(filtered1)
-        elseif N2 > 0
-            max_bins = maximum(filtered2)
-            min_bins = minimum(filtered2)
-        else
-            # Both empty — create dummy bins around 0
-            min_bins = -0.5
-            max_bins = 0.5
-        end
-
-        # Construct edges and ticks
-        if max_bins == min_bins
-            ε = typeof(max_bins) <: Int ? 0.5 : 1e-6
-            edges = [min_bins - ε, min_bins + ε]
-            xticks = [min_bins]
-        else
-            if typeof(max_bins) <: Integer
-                edges = min_bins-0.5:1:max_bins+0.5
-                xticks = floor(Int, minimum(edges)):ceil(Int, maximum(edges))
-            else
-                edges = range(min_bins, max_bins; length=num_bins + 1)
-                xticks = range(min_bins, max_bins; length=min(num_bins, 10))
-            end
-        end
-
-        tick_labels = string.(round.(xticks; digits=2))
-
-        # Start plot
-        if N1 == 0 && N2 == 0
-            histogram([0]; bins=edges,
-                alpha = 0.0,
-                label = "Both distributions are empty",
-                xlabel = "Value",
-                ylabel = "Frequency",
-                title = plot_title,
-                legend = :topright,
-                normalize = :pdf,
-                color = :gray,
-                xticks = (xticks, tick_labels),
-                margin = 6Plots.mm
-            )
-        else
-            if N1 > 0
-                histogram(filtered1;
-                    bins = edges,
-                    alpha = 0.5,
-                    label = "$lab1. N = $N1",
-                    xlabel = "Value",
-                    ylabel = "Frequency",
-                    title = plot_title,
-                    legend = :topright,
-                    normalize = :pdf,
-                    color = cpal[2],
-                    xticks = (xticks, tick_labels),
-                    margin = 6Plots.mm
-                )
-            end
-
-            if N2 > 0
-                histogram!(filtered2;
-                    bins = edges,
-                    alpha = 0.5,
-                    label = "$lab2. N = $N2",
-                    legend = :topright,
-                    normalize = :pdf,
-                    color = cpal[8]
-                )
-            end
-        end
-
-        mkpath(path)
-        savefig("$path/$(safe_title).png")
-        if show_fig
-            display(current())
-        end
-    end
-
+export rowwise_summary, compute_densities, fit_path_stable_plot, compare_distributions, summarize_experiment_data, mut_robustness_population, path_mat_analysis_plot, noise_comparison_timeseries_plot
     
     """
     ---------------------
@@ -405,20 +20,23 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     """
 
     """
-    rowwise_summary. 
-    Computes row-wise summary statistics (mean, median, and standard deviation) for a matrix-like data structure, skipping `nothing` values.
+    rowwise_summary(data) -> Tuple{Vector{Float64}, Vector{Float64}, Vector{Float64}}
 
-    args:
-    - `data`: A 2D array (e.g., `Matrix{Union{T, Nothing}}`) where each row represents a set of values. `nothing` values are ignored in the computations.
+    Computes summary statistics (mean, median, and standard deviation) for each row of a 2D array,
+    ignoring `nothing` values.
 
-    returns:
-    - `means`: A vector of the mean of each row (ignoring `nothing`).
-    - `medians`: A vector of the median of each row (ignoring `nothing`).
-    - `stds`: A vector of the standard deviation of each row (ignoring `nothing`).
+    # Arguments
+    - `data`: A 2D array or matrix where each row contains numeric values or `nothing`.
 
-    notes:
-    - Rows with only `nothing` values are skipped entirely and do not contribute to the output.
-    - Assumes all rows are of the same length.
+    # Returns
+    A tuple containing:
+    1. `Vector{Float64}`: Row means.
+    2. `Vector{Float64}`: Row medians.
+    3. `Vector{Float64}`: Row standard deviations.
+
+    # Notes
+    - Rows containing only `nothing` are skipped (no entry is added to the results).
+    - All `nothing` values are excluded from the computation of statistics.
     """
 
     function rowwise_summary(data)
@@ -426,7 +44,7 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
         medians = Float64[]
         stds    = Float64[]
 
-        for i in 1:size(data, 1)
+        for i in axes(data, 1)
             row = data[i, :]
             valid_values = filter(!isnothing, row)
 
@@ -447,7 +65,7 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     """
 
     """
-    Included in BooleanNetwork module
+    Functions included in BooleanNetwork module:
 
     reg_mutation!(W, mr, σr, pr): Function that modifies W for a mutation on a nonzero entry
     using a resample method
@@ -480,19 +98,38 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     """
 
     """
-    mut_robustness_population: a function that computes the mutational robustness
-    of a list of matrices
+    mut_robustness_population(
+        Ws::Vector{Matrix{Float64}},
+        mr::Float64,
+        σr::Float64,
+        initial_states::Matrix{Float64},
+        max_steps::Int,
+        activation::Function,
+        trials::Int
+    ) -> Vector{Float64}
 
-    args:
-    - Ws: Population of matrices
-    - mr, σr: distribution parameters
-    - initial_states: list of vectors corresponding
-    - max_steps: maximum number of steps for development
-    - activation: activation function
-    - trials: number of repetitions of mutation
+    Estimates the mutational robustness of a population of weight matrices by repeatedly mutating 
+    nonzero elements and measuring whether the resulting phenotype remains unchanged.
 
-    returns:
-    - robustness_scores: A vector of Float64 for each matrix robustness score
+    # Arguments
+    - `Ws`: Vector of adjacency/weight matrices representing individuals in the population.
+    - `mr::Float64`: Mean of the normal distribution used for mutation values.
+    - `σr::Float64`: Standard deviation of the normal distribution used for mutation values.
+    - `initial_states`: Matrix where each row is the initial state vector for the corresponding individual.
+    - `max_steps::Int`: Maximum number of steps allowed for phenotype development.
+    - `activation::Function`: Activation function used during development.
+    - `trials::Int`: Number of random mutations performed per individual.
+
+    # Returns
+    - `Vector{Float64}`: Robustness score for each matrix, defined as the fraction of mutations 
+    that do not change the original phenotype.
+
+    # Notes
+    - Only nonzero weights in each matrix are considered for mutation.
+    - If the original phenotype is unstable (`nothing`), robustness is set to `0.0`.
+    - The original phenotype for each matrix is computed before any mutations.
+    - Mutations are temporary and the matrix is restored after each trial.
+    - Uses multi-threading for faster computation across the population.
     """
 
     function mut_robustness_population(Ws::Vector{Matrix{Float64}},
@@ -554,155 +191,37 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     end
 
     """
-    con_robustness_population: does the same thing as mut_robustness_population,
-    but with connectivity mutation instead of weight mutation
-    """
-    function con_robustness_population(Ws::Vector{Matrix{Float64}},
-        mr::Float64,
-        σr::Float64,
+    noise_robustness_population(
+        Ws::Vector{Matrix{Float64}},
+        noise_dist::Distribution,
         initial_states::Matrix{Float64},
         max_steps::Int,
         activation::Function,
-        trials::Int)
+        trials::Int
+    ) -> Vector{Float64}
 
-        n = length(Ws)
-        rows, cols = size(Ws[1])
-        robustness_scores = zeros(Float64, n)
-        d = Normal(mr, σr)
+    Estimates the noise robustness of a population of weight matrices by repeatedly applying
+    multiplicative noise to nonzero elements and measuring whether the phenotype remains unchanged.
 
-        # Precompute original phenotypes
-        orig_phenotypes = Vector{Union{Vector{Float64},Nothing}}(undef, n)
-        for i in 1:n
-            phen, _ = develop(Ws[i], initial_states[i, :], max_steps, activation)
-            orig_phenotypes[i] = phen
-        end
+    # Arguments
+    - `Ws`: Vector of adjacency/weight matrices representing individuals in the population.
+    - `noise_dist::Distribution`: Distribution from which multiplicative noise factors are sampled.
+    - `initial_states`: Matrix where each row is the initial state vector for the corresponding individual.
+    - `max_steps::Int`: Maximum number of steps allowed for phenotype development.
+    - `activation::Function`: Activation function used during development.
+    - `trials::Int`: Number of noise perturbations tested per individual.
 
-        Threads.@threads for i in 1:n
-            W = Ws[i]
-            state = initial_states[i, :]
-            orig_phen = orig_phenotypes[i]
+    # Returns
+    - `Vector{Float64}`: Robustness score for each matrix, defined as the fraction of noise perturbations
+    that do not change the original phenotype.
 
-            if orig_phen === nothing
-                continue
-            end
-
-            sampled_inds = [(rand(1:rows), rand(1:cols)) for _ in 1:trials]
-            sampled_vals = rand(d, trials)
-            invariant_count = 0
-
-            for t in 1:trials
-                i,j = sampled_inds[t]
-                old_val = W[i,j]
-
-                if iszero(old_val)
-                    W[i,j] = sampled_vals[t]
-                else
-                    W[i,j] = 0.
-                end
-
-                phen, _ = develop(W, state, max_steps, activation)
-
-                if phen !== nothing && phen == orig_phen
-                    invariant_count += 1
-                end
-
-                W[i,j] = old_val  # Restore original weight
-            end
-
-            robustness_scores[i] = invariant_count / trials
-        end
-
-        return robustness_scores
-    end
-    """
-    both_robustness_population: does the same thing as mut_robustness_population,
-    but with weight and connectivity mutations
-    """
-    function both_robustness_population(Ws::Vector{Matrix{Float64}},
-        mr::Float64,
-        σr::Float64,
-        initial_states::Matrix{Float64},
-        max_steps::Int,
-        activation::Function,
-        trials::Int)
-
-        n = length(Ws)
-        robustness_scores = zeros(Float64, n)
-        d = Normal(mr, σr)
-        N_genes = length(Ws[1])
-
-        # Precompute original phenotypes
-        orig_phenotypes = Vector{Union{Vector{Float64},Nothing}}(undef, n)
-        for i in 1:n
-            phen, _ = develop(Ws[i], initial_states[i, :], max_steps, activation)
-            orig_phenotypes[i] = phen
-        end
-
-        Threads.@threads for i in 1:n
-            W = Ws[i]
-            state = initial_states[i, :]
-            orig_phen = orig_phenotypes[i]
-
-            if orig_phen === nothing
-                continue
-            end
-
-            # Preselect non-zero indices
-            nz_inds = findall(!iszero, W)
-            if isempty(nz_inds)
-                continue
-            end
-
-            sampled_inds_mut = rand(nz_inds, trials)
-            sampled_vals_mut = rand(d, trials)
-
-            sampled_inds = rand(N_genes, trials)
-            sampled_vals = rand(d, trials)
-
-            invariant_count = 0
-            for t in 1:trials
-                idx_mut = sampled_inds_mut[t]
-                old_val_mut = W[idx_mut]
-                W[idx_mut] = sampled_vals_mut[t]
-
-                idx_con = sampled_inds_con[t]
-                old_val_con = W[idx_con]
-                if old_val == 0.
-                    W[idx_con] = sampled_vals_con[t]
-                else
-                    W[idx_con] = 0.
-                end
-
-                phen, _ = develop(W, state, max_steps, activation)
-
-                if phen !== nothing && phen == orig_phen
-                    invariant_count += 1
-                end
-
-                W[idx_mut] = old_val_mut  # Restore original weight
-                W[idx_con] = old_val_con
-            end
-
-            robustness_scores[i] = invariant_count / trials
-        end
-
-        return robustness_scores
-    end
-
-    """
-    noise_robustness_population: a function that computes the noise robustness
-    of a list of matrices
-
-    args:
-    - Ws: Population of matrices
-    - noise_dist: distribution from which to sample the perturbations
-    - initial_states: list of vectors corresponding to the initial states
-    - max_steps: maximum number of steps for development
-    - activation: activation function
-    - trials: number of repetitions of mutation
-
-    returns:
-    - robustness_scores: A vector of Float64 for each matrix robustness score
+    # Notes
+    - Only nonzero weights in each matrix are considered for perturbation.
+    - If the original phenotype is unstable (`nothing`), robustness is set to `0.0`.
+    - The original phenotype for each matrix is computed before any perturbations.
+    - Noise is applied multiplicatively: `W[idx] = sampled_noise * W[idx]`.
+    - Perturbations are temporary; the matrix is restored after each trial.
+    - Uses multi-threading to process individuals in parallel.
     """
 
     function noise_robustness_population(Ws::Vector{Matrix{Float64}},
@@ -762,6 +281,70 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     end
 
     """
+    compute_noiseless_dynamics: Simulates noiseless Boolean network development over evolutionary time.
+
+    # Arguments
+    - `evol_matrices::Array`: A `G+1 × pop_size` matrix of evolved Boolean network matrices.
+    - `phen_opt::Vector`: Phenotypic optima for the population.
+    - `parameters::Dict`: Dictionary containing all necessary parameters:
+        - `"G"`: Number of generations.
+        - `"pop_size"`: Number of individuals per generation.
+        - `"N_target"`: Number of target genes.
+        - `"N_regulator"`: Number of regulator genes.
+        - `"max_steps"`: Maximum steps allowed in development.
+        - `"s"`: Selection pressure.
+        - `"unstable_fitness"`: Fitness value for unstable individuals.
+
+    # Returns
+    A named tuple:
+    - `fit::Matrix{Float64}`: Fitness values for all individuals across generations.
+    - `path::Matrix{Any}`: Developmental paths (number of steps) for each individual.
+    - `completion::Vector{Float64}`: Proportion of individuals per generation that completed development.
+    """
+    function compute_noiseless_dynamics(evol_matrices::Matrix, phen_opt::Vector, parameters::Dict)
+
+        G = parameters["G"]
+        pop_size = parameters["pop_size"]
+        N_genes = parameters["N_target"] + parameters["N_regulator"]
+
+        # Initialize data containers
+        fit = Matrix{Float64}(undef, G + 1, pop_size)
+        path = Matrix{Any}(undef, G + 1, pop_size)
+        completion = Vector{Float64}(undef, G + 1)
+
+        # Precompute initial states
+        initial_states = BooleanNetwork.make_initial_states(N_genes, pop_size)
+
+        # Iterate over generations and individuals
+        for gen in 1:G+1
+            count_complete = 0
+
+            for (idx, mat) in enumerate(evol_matrices[gen, :])
+                phen, steps = BooleanNetwork.develop(
+                    mat,
+                    initial_states[idx, :],
+                    parameters["max_steps"],
+                    BooleanNetwork.activation
+                )
+
+                fit[gen, idx] = BooleanNetwork.indiv_fitness(
+                    phen, phen_opt, parameters["N_target"], parameters["s"],
+                    BooleanNetwork.distance, parameters["unstable_fitness"]
+                )
+                path[gen, idx] = steps
+
+                if phen !== nothing
+                    count_complete += 1
+                end
+            end
+
+            completion[gen] = count_complete / pop_size
+        end
+
+        return (fit=fit, path=path, completion=completion)
+    end
+
+    """
     .............
     Matrix Analysis
     .............
@@ -788,20 +371,27 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     end
 
     """
+    compute_densities(data::Array{<:AbstractMatrix, 2}) -> Matrix{Float64}
 
+    Computes the density of positive (nonzero) entries for each matrix in a 
+    generations × population array.
+
+    # Arguments
+    - `data`: A 2D array of matrices with shape `(generations, population_size)`.
+
+    # Returns
+    - `Matrix{Float64}`: A matrix of the same shape as `data` where each entry 
+    is the fraction of positive (nonzero) entries in the corresponding matrix.
     """
-    function compute_density(mat)
-        adj = get_nonzero(mat, positive = true)
-        return count(adj) / length(adj)
-    end
+    function compute_densities(data::Array{<:AbstractMatrix,2})
+        gens, pop_size = size(data)
+        densities = Matrix{Float64}(undef, gens, pop_size)
 
-    function get_densities(data)
-        gens,pop_size = size(data)
-
-        densities = Matrix{Float64}(undef, gens,pop_size)
-
-        for i in 1:gens
-            densities[i,:] .= compute_density.(data[i,:])
+        for i in axes(data, 1)
+            densities[i, :] .= map(mat -> begin
+                    adj = get_nonzero(mat, positive=true)
+                    count(adj) / length(adj)
+                end, data[i, :])
         end
         return densities
     end
@@ -811,6 +401,32 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
     SUMMARIZING FUNCTIONS
     -----------------
     """
+    
+    """
+    summarize_experiment_data(data::Dict) -> Dict
+
+    Computes summary statistics for key experimental data metrics, aggregating
+    per-generation and per-individual measurements.
+
+    # Arguments
+    - `data::Dict`: Dictionary containing experiment results with at least the keys:
+        - `"fitness"`: Matrix of fitness values (generations × population).
+        - `"path_length"`: Matrix of path lengths (generations × population).
+        - `"matrices"`: Array of weight matrices (generations × population).
+        - `"completion"`: Vector of completion rates per generation.
+
+    # Returns
+    - `Dict`: Dictionary with the following entries:
+        - `"avg_fit"`, `"median_fit"`, `"std_fit"`: Row-wise mean, median, and std of fitness.
+        - `"avg_path"`, `"median_path"`, `"std_path"`: Row-wise mean, median, and std of path length.
+        - `"completion"`: Passed through from input data.
+        - `"avg_density"`, `"median_density"`, `"std_density"`: Row-wise mean, median, and std of matrix densities.
+
+    # Notes
+    - Uses `rowwise_summary` to compute statistics ignoring missing or `nothing` values.
+    - Computes densities of positive entries in matrices before summarizing.
+    """
+
     function summarize_experiment_data(data)
 
         processed_data = Dict()
@@ -818,7 +434,7 @@ export rowwise_summary, get_densities, fit_path_stable_plot, compare_distributio
         avg_fit, median_fit, std_fit = rowwise_summary(data["fitness"])
         avg_path, median_path, std_path = rowwise_summary(data["path_length"])
 
-        densities = get_densities(data["matrices"])
+        densities = compute_densities(data["matrices"])
         avg_density, median_density, std_density = rowwise_summary(densities)
 
         processed_data["avg_fit"] = avg_fit
