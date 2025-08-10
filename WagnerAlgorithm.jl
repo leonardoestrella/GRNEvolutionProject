@@ -82,75 +82,38 @@ module BooleanNetwork
     end
 
     """
-    Development with recurrent noise application to the matrix.
-    * Noise applied every k-steps in the evolutionary path
-
-    Arguments:
-    - `W`: original regulation matrix
-    - `C`: initial state vector
-    - `max_steps`: max number of development steps
-    - `activation`: activation function
-    - `noise_prob`: fraction of nonzero weights affected each time
-    - `noise_dist`: distribution for multiplicative noise (E[η]=1)
-    - `k_noise`: number of steps between noise applications
-
-    Returns:
-    - final state (or nothing), number of steps (or nothing)
-    """
-    function develop_noise(W::Matrix{Float64},
-        C::Vector{Float64},
-        max_steps::Int,
-        activation::Function;
-        noise_prob::Float64=0.1,
-        noise_dist::Distribution=Gamma(2, 1/2), #α=2, λ=2=θ^-1 
-        k_noise::Int=10)
-
-        W_current = copy(W)
-        Pi = C
-        Pf = activation(W_current * Pi)
-
-        for step in 1:max_steps
-            if Pi == Pf
-                return Pf, step
-            end
-
-            Pi = Pf
-            if step % k_noise == 0
-                apply_noise!(W_current, noise_prob, noise_dist)
-            end
-            Pf = activation(W_current * Pi)
-        end
-
-        return nothing, nothing
-    end
-
-
-    """
     --------------------
     INITIALIZATION
     --------------------
     """
 
     """
-    make_activity: A function that determines the initial state
-    of the genes
+    make_activity(N::Int) -> Vector{Float64}
+
+    Generates the initial state of the genes for a network.
 
     args:
-    - N: number of genes per network
-    """
+    - `N::Int`: Number of genes in the network.
 
+    returns:
+    - `Vector{Float64}`: A vector of length `N` with alternating values `1.0` and `-1.0`.
+    """
     function make_activity(N::Int)
         return [(-1.)^i for i in 0:N-1]
     end
-
+    
     """
-    make_initial_states :A function that generates a list of pop_size vectors of
-    length N corresponding to the initial vectors C
+    make_initial_states(N::Int, pop_size::Int) -> Matrix{Float64}
+
+    Generates a matrix of initial gene activity states for a population of networks.
 
     args:
-    - N: 
-    """
+    - `N::Int`: Number of genes per network.
+    - `pop_size::Int`: Number of networks in the population.
 
+    returns:
+    - `Matrix{Float64}`: A `pop_size × N` matrix where each row contains the initial gene states.
+    """
     function make_initial_states(N::Int, pop_size::Int)
         activity = Matrix{Float64}(undef, pop_size, N)
         for i in 1:pop_size
@@ -173,21 +136,44 @@ module BooleanNetwork
 
 
     """
-    A function that generates an list of matrices according to some rules
+    generate_initial_matrices(params::Dict, initial_states::AbstractMatrix, activation) 
+        -> Tuple{Vector{Any}, Any}
 
-    args:
-    - mode: what kind of matrices will be part of the initial population
-    - params: model parameters
-    - intial_genotypes: Vector of vectors containing the vector C of each matrix
-    - activation: activation function 
+    Generates an initial population of gene interaction matrices according to the specified `mode`.
 
-    returns:
-    - matrices: Vector of matrices
-    - new_phenotype: nothing if there is no need to update the optimal phenotype
+    Each matrix is `N × N`, where `N = N_target + N_regulator`, with entries drawn from a normal 
+    distribution `Normal(mr, σr)` and sparsified by random masking with probability `c`.
+
+    args
+    - `params::Dict`: Dictionary of parameters. Must include:
+        - `mode::String`: Determines the generation strategy:
+            - `"sparse"`: Random sparse matrices with no stability check.
+            - `"sparse,stable"`: Random sparse matrices that yield a stable phenotype under `develop`.
+            - `"sparse,unstable"`: Random sparse matrices that yield an unstable phenotype under `develop`.
+            - `"sparse,founder"`: A single stable matrix is found and duplicated for the entire population.
+        - `"pop_size"`: Number of matrices to generate.
+        - `"N_target"`: Number of target genes.
+        - `"N_regulator"`: Number of regulator genes.
+        - `"mr"`: Mean of the normal distribution for weights.
+        - `"σr"`: Standard deviation of the normal distribution for weights.
+        - `"c"`: Connection probability (controls sparsity).
+        - `"max_steps"`: Maximum number of steps for phenotype development (used in stable/unstable/founder modes).
+    - `initial_states::AbstractMatrix`: A `pop_size × N` matrix of initial gene states.
+    - `activation`: Activation function passed to `develop`.
+
+    returns
+    - `Tuple`:
+        1. `Vector{Any}`: The generated matrices.
+        2. `Any`: The phenotype of the founder matrix (only in `"sparse,founder"` mode; otherwise `nothing`).
+
+    # Notes
+    - Stability is determined by the `develop` function, which returns `(phenotype, steps)`.
+    - A phenotype is considered stable if it is not `nothing`.
     """
 
-    function generate_initial_matrices(mode, params, initial_states, activation)
-
+    function generate_initial_matrices(params, initial_states, activation)
+        
+        mode = params["mode"]
         pop_size = params["pop_size"]
         N_target = params["N_target"]
         N_regulator = params["N_regulator"]
@@ -281,13 +267,11 @@ module BooleanNetwork
     Properties:
     - N: Number of genes
     - W: Weighted, directed matrix representing the GRN
-    - M: Unweighted, directed connectivity matrix 
     """
 
     @with_kw mutable struct artificial_org
         N::Int64 = 10;
         W::Matrix{Float64} = zeros((10,10));
-        M::Matrix{Int} = zeros((10,10));
     end
 
     """
@@ -348,8 +332,6 @@ module BooleanNetwork
         nz_inds = findall(!iszero, W)
         
         if isempty(nz_inds)
-            # @warn "No non-zero entries to mutate." 
-            # Avoid verbose for small density parameters
             return
         end
 
@@ -363,12 +345,9 @@ module BooleanNetwork
     end
     """
     con_mutation!: a function that mutates the connectivity
-    of a GRN by resampling the weights
-    ** NOTE: It currently modifies a link at random,
-    but we would like to experiment with different removal
-    and addition mechanisms. We could have a probability of
-    modifying an edge, and then have different rules and
-    parameters for the addition and removal after a coin flip
+    of a GRN by adding or removing a weight. 
+    ** NOTE: We would like to experiment with different removal
+    and addition mechanisms. 
 
     args:
     - W: weighted matrix
@@ -439,37 +418,60 @@ module BooleanNetwork
     end
 
     """
-    create_offspring: creates pop_size matrices from an artificial_pop
-    with a survival probability equal to their fitness from randomly sampled
-    parents
+    create_offspring(pop::artificial_pop, activation, distance, params::Dict) 
+        -> Tuple{
+            Vector{Matrix{Float64}},  # offspring
+            Vector{Float64},          # fitness
+            Vector{Any},              # steps
+            Int,                      # completion_gen
+            Matrix{Int}               # parents
+        }
 
-    args:
-    - pop: artificial_pop structure
-        - pop_size: number of organisms
-        - N_regulator: number of regulator genes
-        - N_target: number of target genes
-        - pop_ens: list of organisms
-        - phenotypic_optima: optimal genotype expression
-        - initial_states: initial genotype expression
-    - activation: activation function 
-    - distance: distance function
-    - max_steps: maximum number of steps to find a stable state
-    - s: selection strength
-    - mr, σr: mutation distribution parameters (mean, std)
-    - pr: mutation probability
-    - unstable_fitness: default fitness for unstable matrices
+    Generates a new generation of offspring matrices from an existing `artificial_pop`
+    using recombination, mutation, and fitness-based selection.
 
-    returns:
-    - offspring: list of matrices
-    - fitness: vector of fitnesses of each offspring matrix
-    - steps: number of steps taken by each matrix for finding a stable state 
-        * nothing if unstable
-    - completion_gen: number of stable matrices in this generation
-    - p_rec: probability of recombination
-    ** NOTE: Other measures to be added in time series data
+    # Arguments
+    - `pop::artificial_pop`: Population containing individuals and their properties.
+    - `activation`: Activation function used during development.
+    - `distance`: Distance metric for computing fitness.
+    - `params::Dict`: Dictionary with the following keys:
+        - `"s"::Float64`: Selection strength.
+        - `"mr"::Float64`: Mutation rate for regulatory weights.
+        - `"σr"::Float64`: Standard deviation of weight mutations.
+        - `"pr"::Float64`: Probability of regulatory weight mutation.
+        - `"unstable_fitness"::Float64`: Fitness assigned to unstable phenotypes.
+        - `"p_rec"::Float64`: Probability of recombination per row.
+        - `"pc"::Float64`: Probability of connectivity mutation.
+        - `"noise_prob"::Float64`: Probability of noise applied to weights.
+        - `"noise_dist"`: Distribution from which noise is drawn.
+        - `"max_steps"::Int`: Maximum number of steps to attempt reaching a stable state.
+
+    # Returns
+    A tuple containing:
+    1. `Vector{Matrix{Float64}}`: Offspring weight matrices.
+    2. `Vector{Float64}`: Fitness of each offspring.
+    3. `Vector{Any}`: Number of steps each offspring took to reach a stable state (`nothing` if unstable).
+    4. `Int`: Number of offspring that reached stability (`completion_gen`).
+    5. `Matrix{Int}`: Parent indices for each offspring (`pop_size × 2`).
+
+    # Notes
+    - Offspring are accepted into the new generation with a probability equal to their computed fitness.
+    - Stability is determined by the `develop` function; a stable phenotype is any non-`nothing` return value.
+    - Noise is applied after mutation but before development.
     """
 
-    function create_offspring(pop::artificial_pop, activation,distance, max_steps, s, mr, σr, pr, unstable_fitness, p_rec,pc, noise_prob, noise_dist)
+    function create_offspring(pop::artificial_pop, activation,distance, params)
+
+        s = params["s"]
+        mr = params["mr"]
+        σr = params["σr"]
+        pr = params["pr"]
+        unstable_fitness = params["unstable_fitness"]
+        p_rec = params["p_rec"]
+        pc = params["pc"]
+        noise_prob = params["noise_prob"]
+        noise_dist = params["noise_dist"]
+        max_steps = params["max_steps"]
 
         pop_size = pop.pop_size
         phenotypic_optima = pop.phenotypic_optima
@@ -536,25 +538,48 @@ module BooleanNetwork
     EVOLUTIONARY ALGORITHM
     -----------------------
     """
-
+    
     """
-    run_simulation: a function that runs Wagner's (1996) evolutionary algorithm
+    run_simulation(parameters::Dict) -> Dict
 
-    args:
-    - parameters: simulation parameters in a Dict
-        - G: Number of generations
-        - pop_size: population size
-        - N_target: number of target genes
-        - N_regulator: number of regulator genes
-        - c: connectivity of matrices
-        - p: probability of 1 in optimal phenotype
-        - mr, σr: mean and standard deviation of weights in adjacency matrices
-        - pr: probability of mutation in matrix
-        - s: selection strength
-        - unstable_fitness: default fitness for unstable matrices
-        - mode: mode of initial population:
-            "sparse", "sparse,stable", "sparse,unstable", "sparse,founder"
+    Runs an evolutionary algorithm based on and modified from Wagner (1996) for a given number of generations,
+    starting from an initialized population of gene regulatory networks, and records
+    population- and individual-level measurements over time.
+
+    # Arguments
+    - `parameters::Dict`: Simulation parameters, containing:
+        - `"G"::Int`: Number of generations.
+        - `"pop_size"::Int`: Population size.
+        - `"N_target"::Int`: Number of target genes.
+        - `"N_regulator"::Int`: Number of regulator genes.
+        - `"c"`: Connectivity of matrices.
+        - `"p"::Float64`: Probability of 1 in optimal phenotype.
+        - `"mr"::Float64`: Mutation rate for regulatory weights.
+        - `"σr"::Float64`: Standard deviation of weight mutations.
+        - `"pr"::Float64`: Probability of regulatory weight mutation.
+        - `"s"::Float64`: Selection strength.
+        - `"unstable_fitness"::Float64`: Fitness assigned to unstable phenotypes.
+        - `"mode"::String`: Initialization mode (`"sparse"`, `"sparse,stable"`, `"sparse,unstable"`, `"sparse,founder"`).
+        - `"max_steps"::Int`: Maximum number of steps to reach a stable state.
+        - `"noise_prob"::Float64`: Probability of noise applied to weights.
+        - `"noise_dist"`: Distribution from which noise is drawn.
+        - Any other keys required by `generate_initial_matrices` and `create_offspring`.
+
+    # Returns
+    `Dict` containing:
+    - `"matrices"`: `Array{Matrix{Float64}}` of shape `(G+1, pop_size)`, weight matrices for each generation and individual.
+    - `"fitness"`: `Matrix{Float64}` of shape `(G+1, pop_size)`, fitness values per generation and individual.
+    - `"path_length"`: `Matrix{Any}` of shape `(G+1, pop_size)`, number of steps to stability (or `nothing` if unstable).
+    - `"completion"`: `Vector{Float64}` of length `G+1`, fraction of stable individuals per generation.
+    - `"genealogy_tree"`: `Array{Int}` of shape `(G, pop_size, 2)`, parent indices for each offspring.
+    - `"phenotypic_optima"`: Final optimal phenotype.
+
+    # Notes
+    - The first generation is evaluated with noise applied before development.
+    - Stability is determined by the `develop` function; unstable phenotypes return `nothing`.
+    - Offspring generation (recombination, mutation, survival) is handled by `create_offspring`.
     """
+
     function run_simulation(parameters)
 
         # PARAMETER ASSIGNATION
@@ -563,17 +588,10 @@ module BooleanNetwork
         N_target = parameters["N_target"]
         N_regulator = parameters["N_regulator"]
         N_genes = N_target + N_regulator
-        c = parameters["c"]
         p = parameters["p"]
-        mr = parameters["mr"]
-        σr = parameters["σr"]
-        pr = parameters["pr"]
-        pc = parameters["pc"]
         max_steps = parameters["max_steps"]
         s = parameters["s"]
-        p_rec = parameters["p_rec"]
         unstable_fitness = parameters["unstable_fitness"]
-        mode = parameters["mode"]
 
         noise_prob = parameters["noise_prob"]
         noise_dist = parameters["noise_dist"]
@@ -583,7 +601,7 @@ module BooleanNetwork
         phenotypic_optima = make_optimal_phenotype(N_target, p)
         
         population = artificial_pop(pop_size = pop_size, N_regulator = N_regulator, N_target = N_target, phenotypic_optima = phenotypic_optima, initial_states = initial_states)
-        initial_matrices, new_optima = generate_initial_matrices(mode, parameters, initial_states, activation)
+        initial_matrices, new_optima = generate_initial_matrices(parameters, initial_states, activation)
         replace_matrices!(population, initial_matrices)
 
         # Update if there is a new optima generate from mode of initialziation
@@ -631,7 +649,7 @@ module BooleanNetwork
         for gen in 2:G+1
             completion_gen = 0
             # compute the next generation (recombination, mutation, and fitness survival are implicit)
-            offspring, fit, steps, completion_gen, parents = create_offspring(population, activation, distance, max_steps, s, mr, σr, pr, unstable_fitness, p_rec,pc,noise_prob,noise_dist)
+            offspring, fit, steps, completion_gen, parents = create_offspring(population, activation, distance, parameters)
             
             # store historic measures
 
@@ -645,17 +663,12 @@ module BooleanNetwork
             replace_matrices!(population, offspring)
         end
 
-        # PROCESS DATA
-
-        # currently, just group all of them together :)
-
         data = Dict("matrices"  => matrices_history,
                     "fitness" => fitness_history,
                     "path_length" => path_length_history,
                     "completion" => completion,
                     "genealogy_tree" => genealogy_tree,
                     "phenotypic_optima" => population.phenotypic_optima)
-
 
         return data
     end
